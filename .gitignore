@@ -1,0 +1,17 @@
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# environments
+.venv/
+venv/
+
+# editors
+.idea/
+.vscode/
+
+# annotation output written while working, see --out
+*_annotations/
