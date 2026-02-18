@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "sam2-leak-annotator"
+name = "sam2-annotator"
 version = "0.1.0"
-description = "Point-prompted SAM 2.1 annotator for binary leak segmentation masks"
+description = "Point-prompted SAM 2.1 annotator for semantic segmentation masks with user-defined classes"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -19,7 +19,7 @@ dependencies = [
 ]
 
 [project.scripts]
-sam2-leak-annotator = "sam2_leak_annotator.__main__:main"
+sam2-annotator = "sam2_annotator.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
