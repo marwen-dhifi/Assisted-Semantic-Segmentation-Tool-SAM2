@@ -1,4 +1,4 @@
-"""Image list, done-progress and mask files. Everything is keyed by path relative to the image root."""
+"""Image list, class list, done-progress and label masks. Images are keyed by path relative to the image root."""
 
 from __future__ import annotations
 
@@ -7,22 +7,38 @@ from pathlib import Path
 
 import numpy as np
 
-from .config import IMG_EXTS
+from .config import IMG_EXTS, MAX_CLASSES
 from .imageio import imread_mask, imwrite_png
+
+
+def parse_classes(text: str) -> list[str]:
+    """Comma separated class names. Order matters: class i is stored as pixel value i + 1."""
+    classes = [c.strip() for c in text.split(",") if c.strip()]
+    if not classes:
+        raise ValueError("enter at least one class")
+    lowered = [c.lower() for c in classes]
+    if len(set(lowered)) != len(lowered):
+        raise ValueError("class names must be unique")
+    if len(classes) > MAX_CLASSES:
+        raise ValueError(f"at most {MAX_CLASSES} classes, mask pixels are uint8")
+    return classes
 
 
 class Dataset:
     """Output layout:
 
-        <out>/masks/<rel path>.png   single channel, values {0, 1}
+        <out>/masks/<rel path>.png   single channel uint8, 0 = background, k = classes[k - 1]
+        <out>/classes.json           {"classes": [...]}, fixes the id of every class
         <out>/progress.json          {"done": [rel paths]}
     """
 
-    def __init__(self, images_root: Path, out_root: Path):
+    def __init__(self, images_root: Path, out_root: Path, classes: list[str]):
         self.images_root = images_root.resolve()
         self.out_root = out_root.resolve()
         self.masks_root = self.out_root / "masks"
+        self.classes_json = self.out_root / "classes.json"
         self.progress_json = self.out_root / "progress.json"
+        self.classes = list(classes)
         if not self.images_root.is_dir():
             raise NotADirectoryError(f"image folder not found: {self.images_root}")
 
@@ -31,7 +47,21 @@ class Dataset:
                              if p.suffix.lower() in IMG_EXTS and not p.is_relative_to(self.out_root))
         if not self.images:
             raise FileNotFoundError(f"no images found under {self.images_root}")
+        self._check_classes()
         self.done = self._load_progress()
+
+    def _check_classes(self) -> None:
+        # masks store ids, not names: reusing an output folder with another list would silently relabel them
+        if self.classes_json.exists():
+            try:
+                saved = json.loads(self.classes_json.read_text(encoding="utf-8")).get("classes", [])
+            except (OSError, ValueError):
+                saved = None
+            if saved and saved != self.classes:
+                raise ValueError(f"{self.out_root} was annotated with classes {', '.join(saved)}; "
+                                 "use the same list in the same order, or another output folder")
+        self.out_root.mkdir(parents=True, exist_ok=True)
+        self.classes_json.write_text(json.dumps({"classes": self.classes}, indent=2), encoding="utf-8")
 
     def rel(self, path) -> str:
         return Path(path).relative_to(self.images_root).as_posix()
@@ -63,19 +93,21 @@ class Dataset:
                 return i
         return None
 
-    def load_mask(self, img_path) -> np.ndarray | None:
+    def load_label(self, img_path) -> np.ndarray | None:
         mp = self.mask_path(img_path)
         if not mp.exists():
             return None
         m = imread_mask(str(mp))
-        return None if m is None else (m > 0).astype(np.uint8)
+        if m is None:
+            return None
+        return m if m.ndim == 2 else m[..., 0]
 
-    def save_mask(self, img_path, mask: np.ndarray) -> None:
+    def save_label(self, img_path, label: np.ndarray) -> None:
         # an empty mask is not written: "no file" and "not annotated yet" stay the same thing
-        if mask.any():
+        if label.any():
             mp = self.mask_path(img_path)
             mp.parent.mkdir(parents=True, exist_ok=True)
-            imwrite_png(mp, mask)  # uint8, values {0, 1}
+            imwrite_png(mp, label.astype(np.uint8))
 
     def mark_done(self, img_path) -> None:
         self.done.add(self.rel(img_path))
