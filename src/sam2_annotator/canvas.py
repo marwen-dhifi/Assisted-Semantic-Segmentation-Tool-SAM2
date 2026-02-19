@@ -1,4 +1,4 @@
-"""Image view with the mask overlay, SAM point prompts and the brush."""
+"""Image view with the class mask overlay, SAM point prompts and the brush."""
 
 from __future__ import annotations
 
@@ -9,23 +9,26 @@ from PySide6.QtGui import QBrush, QColor, QImage, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
 from . import theme
-from .config import BRUSH_MAX, BRUSH_MIN, BRUSH_STEP, DEFAULT_BRUSH, OVERLAY_ALPHA, OVERLAY_COLOR
+from .config import BRUSH_MAX, BRUSH_MIN, BRUSH_STEP, DEFAULT_BRUSH, OVERLAY_ALPHA, class_color
 
 POSITIVE, NEGATIVE = 1, 0  # SAM point labels
 
 
 class Canvas(QWidget):
-    predict_requested = Signal(str, object, object)  # path, points (N x 2 float32), labels (N int32)
+    predict_requested = Signal(str, int, object, object)  # path, class index, points (N x 2), labels (N)
 
-    def __init__(self):
+    def __init__(self, n_classes: int):
         super().__init__()
         self.setMinimumSize(480, 480)
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)  # keyboard stays on the main window
+        self.n_classes = n_classes
+        self.active = 0
         self.brush_size = DEFAULT_BRUSH
         self.mode = "point"                           # "point" | "brush"
         self.on_brush_change = None                   # callback(int)
         self.mouse_pos = None
+        self._palette = np.array([(0, 0, 0)] + [class_color(i) for i in range(n_classes)], np.uint8)
         self._reset_state()
 
     def _reset_state(self):
@@ -34,35 +37,51 @@ class Canvas(QWidget):
         self.base_qimg = None
         self._base_buf = None  # QImage does not copy: the numpy buffer must outlive it
         self.h = self.w = 0
-        self.mask = None
+        self.masks: list[np.ndarray] = []           # one binary mask per class
+        self.points: list[list] = [[] for _ in range(self.n_classes)]  # per class: (x_img, y_img, label)
         self.overlay_qimg = None
         self._ov_buf = None
-        self.points = []       # (x_img, y_img, label)
         self._painting = False
         self._erasing = False
 
-    def set_image(self, path, rgb, mask=None):
+    def set_image(self, path, rgb, label=None):
+        """label: uint8 class-id map as saved on disk, or None for a fresh image."""
         self.path = path
         self.rgb = rgb
         self.h, self.w = rgb.shape[:2]
         self._base_buf = np.ascontiguousarray(rgb)
         self.base_qimg = QImage(self._base_buf.data, self.w, self.h, 3 * self.w, QImage.Format.Format_RGB888)
-        self.points = []
-        self.mask = mask if mask is not None else np.zeros((self.h, self.w), np.uint8)
+        self.points = [[] for _ in range(self.n_classes)]
+        if label is not None and label.shape == (self.h, self.w):
+            self.masks = [(label == c + 1).astype(np.uint8) for c in range(self.n_classes)]
+        else:
+            self.masks = [np.zeros((self.h, self.w), np.uint8) for _ in range(self.n_classes)]
         self._painting = self._erasing = False
         self._rebuild_overlay()
         self.update()
 
+    def set_active(self, cls: int):
+        self.active = cls
+        self.update()  # points shown are the active class's
+
     def clear(self):
-        if self.mask is None:
+        """Clear the active class: its points and its mask."""
+        if not self.masks:
             return
-        self.points = []
-        self.mask = np.zeros((self.h, self.w), np.uint8)
+        self.points[self.active] = []
+        self.masks[self.active] = np.zeros((self.h, self.w), np.uint8)
         self._rebuild_overlay()
         self.update()
 
     def has_mask(self) -> bool:
-        return self.mask is not None and bool(self.mask.any())
+        return any(m.any() for m in self.masks)
+
+    def label_map(self) -> np.ndarray:
+        # later classes are painted last and win where masks overlap, so the result is deterministic
+        label = np.zeros((self.h, self.w), np.uint8)
+        for c, m in enumerate(self.masks):
+            label[m > 0] = c + 1
+        return label
 
     # aspect fit with letterbox offset: (scale, x offset, y offset) from image to widget pixels
     def _geom(self):
@@ -78,12 +97,13 @@ class Canvas(QWidget):
         return ix, iy, (0 <= ix < self.w and 0 <= iy < self.h)
 
     def _rebuild_overlay(self):
-        if self.mask is None:
+        if not self.masks:
             self.overlay_qimg = None
             return
+        label = self.label_map()
         rgba = np.zeros((self.h, self.w, 4), np.uint8)
-        m = self.mask > 0
-        rgba[m, 0], rgba[m, 1], rgba[m, 2], rgba[m, 3] = (*OVERLAY_COLOR, OVERLAY_ALPHA)
+        rgba[..., :3] = self._palette[label]
+        rgba[..., 3] = np.where(label > 0, OVERLAY_ALPHA, 0)
         self._ov_buf = np.ascontiguousarray(rgba)
         self.overlay_qimg = QImage(self._ov_buf.data, self.w, self.h, 4 * self.w, QImage.Format.Format_RGBA8888)
 
@@ -100,7 +120,7 @@ class Canvas(QWidget):
         if self.overlay_qimg is not None:
             p.drawImage(target, self.overlay_qimg)
 
-        for (x, y, lab) in self.points:
+        for (x, y, lab) in self.points[self.active]:
             col = QColor(46, 229, 46) if lab == POSITIVE else QColor(255, 64, 64)
             p.setBrush(QBrush(col))
             p.setPen(QPen(QColor("white"), 2))
@@ -108,7 +128,7 @@ class Canvas(QWidget):
 
         if self.mode == "brush" and self.mouse_pos is not None:
             p.setBrush(Qt.BrushStyle.NoBrush)
-            p.setPen(QPen(QColor("white"), 1, Qt.PenStyle.DashLine))
+            p.setPen(QPen(QColor(*class_color(self.active)), 1, Qt.PenStyle.DashLine))
             r = self.brush_size * s
             p.drawEllipse(self.mouse_pos, r, r)
         p.end()
@@ -118,17 +138,18 @@ class Canvas(QWidget):
             return
         ix, iy, ok = self._to_img(e.position().x(), e.position().y())
         btn = e.button()
+        pts = self.points[self.active]
         if self.mode == "point":
             if btn == Qt.MouseButton.LeftButton and ok:
                 neg = bool(e.modifiers() & Qt.KeyboardModifier.ShiftModifier)
-                self.points.append((ix, iy, NEGATIVE if neg else POSITIVE))
+                pts.append((ix, iy, NEGATIVE if neg else POSITIVE))
                 self._run_predict()
-            elif btn == Qt.MouseButton.RightButton and self.points:
-                self.points.pop()
-                if self.points:
+            elif btn == Qt.MouseButton.RightButton and pts:
+                pts.pop()
+                if pts:
                     self._run_predict()
                 else:
-                    self.mask = np.zeros((self.h, self.w), np.uint8)
+                    self.masks[self.active] = np.zeros((self.h, self.w), np.uint8)
                     self._rebuild_overlay()
                     self.update()
         else:
@@ -163,24 +184,26 @@ class Canvas(QWidget):
         self.update()
 
     def _paint_at(self, ix, iy, add):
-        if self.mask is None:
+        if not self.masks:
             return
-        cv2.circle(self.mask, (int(round(ix)), int(round(iy))), self.brush_size, 1 if add else 0, -1)
+        cv2.circle(self.masks[self.active], (int(round(ix)), int(round(iy))), self.brush_size, 1 if add else 0, -1)
         self._rebuild_overlay()
         self.update()
 
     def _run_predict(self):
-        # every point feeds one prediction, so an extra click refines the mask instead of replacing it
-        if not self.points:
+        # every point of the active class feeds one prediction, so an extra click refines that class's
+        # mask instead of replacing it
+        pts = self.points[self.active]
+        if not pts:
             return
-        pts = np.array([[x, y] for (x, y, _) in self.points], dtype=np.float32)
-        labs = np.array([lab for (_, _, lab) in self.points], dtype=np.int32)
-        self.predict_requested.emit(self.path, pts, labs)
+        coords = np.array([[x, y] for (x, y, _) in pts], dtype=np.float32)
+        labs = np.array([lab for (_, _, lab) in pts], dtype=np.int32)
+        self.predict_requested.emit(self.path, self.active, coords, labs)
 
-    @Slot(str, object)
-    def apply_mask(self, path, mask):
-        if path != self.path:
+    @Slot(str, int, object)
+    def apply_mask(self, path, cls, mask):
+        if path != self.path or not (0 <= cls < self.n_classes):
             return  # stale result for a previous image
-        self.mask = mask.copy()
+        self.masks[cls] = mask.copy()
         self._rebuild_overlay()
         self.update()
