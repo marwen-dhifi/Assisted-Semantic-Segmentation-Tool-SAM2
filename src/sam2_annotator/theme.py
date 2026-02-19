@@ -27,3 +27,13 @@ BUTTON_PRIMARY = (f"QPushButton{{background:{ACCENT};color:white;border:none;bor
                   f"padding:12px;font:bold 14px 'Segoe UI';}}QPushButton:hover{{background:{ACCENT_HOVER};}}")
 BUTTON_DANGER = (f"QPushButton{{background:#2d1a1a;color:{RED};border:none;border-radius:8px;"
                  f"padding:10px;font:13px 'Segoe UI';}}QPushButton:hover{{background:#4a2020;}}")
+
+
+def class_button(color: tuple[int, int, int], active: bool) -> str:
+    hexc = "#%02x%02x%02x" % color
+    if active:
+        return (f"QPushButton{{background:{BG_HOVER};color:{TEXT_MAIN};border:2px solid {hexc};"
+                f"border-radius:8px;padding:8px;text-align:left;font:bold 13px 'Consolas';}}")
+    return (f"QPushButton{{background:{BG_CARD};color:{TEXT_MAIN};border:none;border-left:4px solid {hexc};"
+            f"border-radius:8px;padding:8px;text-align:left;font:13px 'Consolas';}}"
+            f"QPushButton:hover{{background:{BG_HOVER};}}")
