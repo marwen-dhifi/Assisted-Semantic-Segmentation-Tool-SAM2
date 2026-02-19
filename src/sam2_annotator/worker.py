@@ -9,7 +9,7 @@ from PySide6.QtCore import QObject, Signal, Slot
 
 class Sam2Worker(QObject):
     encoded = Signal(str)             # path that finished encoding, or "__ready__" once the model is loaded
-    mask_ready = Signal(str, object)  # path, mask (uint8 HxW, values {0, 1})
+    mask_ready = Signal(str, int, object)  # path, class index, mask (uint8 HxW, values {0, 1})
     error = Signal(str)
 
     def __init__(self, model_id: str, device: str):
@@ -42,8 +42,8 @@ class Sam2Worker(QObject):
         except Exception as e:
             self.error.emit(f"Encode failed: {e}")
 
-    @Slot(str, object, object)
-    def predict(self, path: str, pts: object, labels: object):
+    @Slot(str, int, object, object)
+    def predict(self, path: str, cls: int, pts: object, labels: object):
         # points for an image that is no longer the encoded one would be decoded against the wrong embedding
         if self.predictor is None or path != self.cur_path:
             return
@@ -54,6 +54,6 @@ class Sam2Worker(QObject):
                     point_labels=labels,
                     multimask_output=False,
                 )
-            self.mask_ready.emit(path, (masks[0] > 0).astype(np.uint8))
+            self.mask_ready.emit(path, cls, (masks[0] > 0).astype(np.uint8))
         except Exception as e:
             self.error.emit(f"Predict failed: {e}")
