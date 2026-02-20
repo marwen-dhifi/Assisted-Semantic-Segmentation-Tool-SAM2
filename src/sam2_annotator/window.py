@@ -12,13 +12,14 @@ from PySide6.QtWidgets import (
 
 from . import theme
 from .canvas import Canvas
+from .config import HOTKEY_CLASSES, class_color
 from .dataset import Dataset
 from .imageio import imread_rgb
 from .worker import Sam2Worker
 
-HELP = ("Left = leak point\nShift+Left = NOT-leak point\nRight = undo last point\n"
+HELP = ("1-9 = active class\nLeft = object point\nShift+Left = exclude point\nRight = undo last point\n"
         "Brush mode: Left paint / Right erase\nWheel or [ ] = brush size\n"
-        "Delete = remove image+mask from dataset")
+        "C = clear the active class\nDelete = remove image+mask from dataset")
 
 
 class MainWindow(QMainWindow):
@@ -26,7 +27,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self, dataset: Dataset, model_id: str, device: str, worker_cls=Sam2Worker):
         super().__init__()
-        self.setWindowTitle("Leak Annotator | SAM2")
+        self.setWindowTitle("SAM2 Annotator")
         self.resize(1400, 880)
         self.setStyleSheet(f"background:{theme.BG_DARK};")
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -69,8 +70,8 @@ class MainWindow(QMainWindow):
             b.clicked.connect(cb)
             return b
 
-        lv.addWidget(label("LEAK ANNOTATOR", theme.TITLE))
-        lv.addWidget(label(f"device: {self.device}   model: {self.model_id.split('-')[-1]}", theme.DIM, True))
+        lv.addWidget(label("SAM2 ANNOTATOR", theme.TITLE))
+        lv.addWidget(label(f"device: {self.device}   model: {self.model_id.split('/')[-1]}", theme.DIM, True))
         self.stats_lbl = label("", theme.DIM, True)
         lv.addWidget(self.stats_lbl)
         self.progress = QProgressBar()
@@ -88,10 +89,18 @@ class MainWindow(QMainWindow):
         jrow.addWidget(self.jump)
         lv.addLayout(jrow)
 
+        lv.addWidget(label("CLASSES", theme.DIM))
+        self.class_buttons = []
+        for i, name in enumerate(self.ds.classes):
+            key = f"{i + 1}   " if i < HOTKEY_CLASSES else "    "
+            b = button(f"{key}{name}", lambda _=False, c=i: self._set_class(c))
+            lv.addWidget(b)
+            self.class_buttons.append(b)
+
         self.mode_lbl = label("", theme.MODE)
         lv.addWidget(self.mode_lbl)
         lv.addWidget(button("Toggle Brush / Point  (B)", self._toggle_mode))
-        lv.addWidget(button("Clear mask  (C)", lambda: self.canvas.clear()))
+        lv.addWidget(button("Clear class  (C)", lambda: self.canvas.clear()))
         lv.addWidget(button("Next unlabeled", self._next_unlabeled))
         nav = QHBoxLayout()
         nav.addWidget(button("← Prev (Q)", self._prev))
@@ -104,12 +113,13 @@ class MainWindow(QMainWindow):
         self.status_lbl = label("", theme.DIM, True)
         lv.addWidget(self.status_lbl)
 
-        self.canvas = Canvas()
+        self.canvas = Canvas(len(self.ds.classes))
         self.canvas.on_brush_change = lambda _size: self._refresh_mode_label()
         self.canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         lay.addWidget(left)
         lay.addWidget(self.canvas, 1)
+        self._set_class(0)
         self._refresh_mode_label()
         self._refresh_stats()
 
@@ -138,7 +148,7 @@ class MainWindow(QMainWindow):
             self._model_ready = True
             self._show(self.idx)
         elif token == self._cur_path():
-            self._status("ready, click on the leak")
+            self._status(f"ready, active class: {self.ds.classes[self.canvas.active]}")
 
     @Slot(str)
     def _on_error(self, msg):
@@ -158,16 +168,16 @@ class MainWindow(QMainWindow):
         if rgb is None:
             self._status(f"cannot read {Path(path).name}", warn=True)
             return
-        self.canvas.set_image(path, rgb, self.ds.load_mask(path))
+        self.canvas.set_image(path, rgb, self.ds.load_label(path))
         if self._model_ready:
             self._status("encoding image...")
             self.request_encode.emit(path, rgb)
         self._refresh_stats()
 
     def _save_mask(self, path):
-        if self.canvas.path != path or self.canvas.mask is None:
+        if self.canvas.path != path or not self.canvas.masks:
             return
-        self.ds.save_mask(path, self.canvas.mask)
+        self.ds.save_label(path, self.canvas.label_map())
 
     def _prev(self):
         if self.idx > 0:
@@ -232,6 +242,13 @@ class MainWindow(QMainWindow):
 
     # labels
 
+    def _set_class(self, cls: int):
+        self.canvas.set_active(cls)
+        for i, b in enumerate(self.class_buttons):
+            b.setStyleSheet(theme.class_button(class_color(i), i == cls))
+        if self._model_ready:
+            self._status(f"ready, active class: {self.ds.classes[cls]}")
+
     def _toggle_mode(self):
         self.canvas.mode = "brush" if self.canvas.mode == "point" else "point"
         self._refresh_mode_label()
@@ -243,7 +260,7 @@ class MainWindow(QMainWindow):
 
     def _refresh_info(self):
         if not self.ds.images:
-            self.setWindowTitle("Leak Annotator | SAM2")
+            self.setWindowTitle("SAM2 Annotator")
             return
         rel = self.ds.rel(self._cur_path())
         tag = "done" if rel in self.ds.done else "open"
@@ -260,7 +277,10 @@ class MainWindow(QMainWindow):
 
     def keyPressEvent(self, e):
         k = e.key()
-        if k == Qt.Key.Key_Space:
+        n = k - Qt.Key.Key_1
+        if 0 <= n < min(HOTKEY_CLASSES, len(self.ds.classes)):
+            self._set_class(n)
+        elif k == Qt.Key.Key_Space:
             self._done_and_next()
         elif k == Qt.Key.Key_D:
             self._next()
