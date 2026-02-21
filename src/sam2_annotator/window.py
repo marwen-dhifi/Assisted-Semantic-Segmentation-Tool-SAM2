@@ -34,6 +34,7 @@ class MainWindow(QMainWindow):
         self.device = device
         self.idx = dataset.first_unlabeled()
         self._model_ready = False
+        self._saved_note = ""  # "<file> saved. " shown in front of the next ready message
 
         self._build_ui()
         self._start_worker(worker_cls)
@@ -101,9 +102,9 @@ class MainWindow(QMainWindow):
         lv.addWidget(button("Next unlabeled", self._next_unlabeled))
         nav = QHBoxLayout()
         nav.addWidget(button("← Prev (Q)", self._prev))
-        nav.addWidget(button("Next (D) →", self._next))
+        nav.addWidget(button("Next (D) →", self._next, theme.BUTTON_PRIMARY))
         lv.addLayout(nav)
-        lv.addWidget(button("DONE + Save  (Space)", self._done_and_next, theme.BUTTON_PRIMARY))
+        lv.addWidget(label("leaving an image saves it; it counts as annotated once it has a mask", theme.DIM, True))
         lv.addWidget(button("Delete image  (Delete)", self._delete_current, theme.BUTTON_DANGER))
         lv.addStretch(1)
         self.status_lbl = label("", theme.DIM, True)
@@ -145,7 +146,8 @@ class MainWindow(QMainWindow):
             self._model_ready = True
             self._show(self.idx)
         elif token == self._cur_path():
-            self._status(f"ready, active class: {self.ds.classes[self.canvas.active]}")
+            self._status(f"{self._saved_note}ready, active class: {self.ds.classes[self.canvas.active]}")
+            self._saved_note = ""
 
     @Slot(str)
     def _on_error(self, msg):
@@ -158,7 +160,7 @@ class MainWindow(QMainWindow):
 
     def _show(self, idx, autosave=True):
         if autosave and self.canvas.path is not None:
-            self._save_mask(self.canvas.path)
+            self._commit()
         self.idx = max(0, min(idx, len(self.ds.images) - 1))
         path = self._cur_path()
         rgb = imread_rgb(path)
@@ -171,10 +173,14 @@ class MainWindow(QMainWindow):
             self.request_encode.emit(path, rgb)
         self._refresh_stats()
 
-    def _save_mask(self, path):
-        if self.canvas.path != path or not self.canvas.masks:
-            return
-        self.ds.save_label(path, self.canvas.label_map())
+    def _commit(self) -> bool:
+        """Save the image being left: annotated if it has a mask, otherwise any old mask is removed."""
+        path = self.canvas.path
+        if path is None or not self.canvas.masks:
+            return False
+        annotated = self.ds.commit(path, self.canvas.label_map())
+        self._saved_note = f"{Path(path).name} saved. " if annotated else ""
+        return annotated
 
     def _prev(self):
         if self.idx > 0:
@@ -183,16 +189,12 @@ class MainWindow(QMainWindow):
     def _next(self):
         if self.idx < len(self.ds.images) - 1:
             self._show(self.idx + 1)
-
-    def _done_and_next(self):
-        path = self.canvas.path
-        if path is not None:
-            if not self.canvas.has_mask():
-                self._status("empty mask, not marked done", warn=True)
-                return
-            self._save_mask(path)
-            self.ds.mark_done(path)
-        self._next()
+        else:
+            # last image: nothing to move to, but Next must still save what is on screen
+            annotated = self._commit()
+            self._saved_note = ""
+            self._refresh_stats()
+            self._status("last image, saved" if annotated else "last image, nothing to save")
 
     def _next_unlabeled(self):
         i = self.ds.next_unlabeled(self.idx)
@@ -277,8 +279,6 @@ class MainWindow(QMainWindow):
         n = k - Qt.Key.Key_1
         if 0 <= n < min(HOTKEY_CLASSES, len(self.ds.classes)):
             self._set_class(n)
-        elif k == Qt.Key.Key_Space:
-            self._done_and_next()
         elif k == Qt.Key.Key_D:
             self._next()
         elif k == Qt.Key.Key_Q:
@@ -299,8 +299,7 @@ class MainWindow(QMainWindow):
             super().keyPressEvent(e)
 
     def closeEvent(self, e):
-        if self.canvas.path is not None:
-            self._save_mask(self.canvas.path)
+        self._commit()
         self.ds.save_progress()
         self.thread.quit()
         self.thread.wait(2000)
