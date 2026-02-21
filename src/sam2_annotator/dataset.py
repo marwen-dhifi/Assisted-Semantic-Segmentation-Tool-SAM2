@@ -102,16 +102,25 @@ class Dataset:
             return None
         return m if m.ndim == 2 else m[..., 0]
 
-    def save_label(self, img_path, label: np.ndarray) -> None:
-        # an empty mask is not written: "no file" and "not annotated yet" stay the same thing
-        if label.any():
-            mp = self.mask_path(img_path)
+    def commit(self, img_path, label: np.ndarray) -> bool:
+        """Save the label map of an image being left and set its done state. Returns True if annotated.
+
+        An image is annotated exactly when its mask has foreground: a non-empty mask is written and
+        marked done, an empty one removes any old mask file and the done mark, so a mask cleared by
+        the user does not survive on disk.
+        """
+        mp = self.mask_path(img_path)
+        rel = self.rel(img_path)
+        annotated = bool(label.any())
+        if annotated:
             mp.parent.mkdir(parents=True, exist_ok=True)
             imwrite_png(mp, label.astype(np.uint8))
-
-    def mark_done(self, img_path) -> None:
-        self.done.add(self.rel(img_path))
-        self.save_progress()
+        elif mp.exists():
+            mp.unlink()
+        if annotated != (rel in self.done):
+            (self.done.add if annotated else self.done.discard)(rel)
+            self.save_progress()
+        return annotated
 
     def delete(self, idx: int) -> None:
         """Remove the image file, its mask and its progress entry. Raises OSError if the image cannot go."""
