@@ -15,11 +15,8 @@ from .canvas import Canvas
 from .config import HOTKEY_CLASSES, class_color
 from .dataset import Dataset
 from .imageio import imread_rgb
+from .shortcuts import ShortcutsCard
 from .worker import Sam2Worker
-
-HELP = ("1-9 = active class\nLeft = object point\nShift+Left = exclude point\nRight = undo last point\n"
-        "Brush mode: Left paint / Right erase\nWheel or [ ] = brush size\n"
-        "C = clear the active class\nDelete = remove image+mask from dataset")
 
 
 class MainWindow(QMainWindow):
@@ -108,7 +105,6 @@ class MainWindow(QMainWindow):
         lv.addLayout(nav)
         lv.addWidget(button("DONE + Save  (Space)", self._done_and_next, theme.BUTTON_PRIMARY))
         lv.addWidget(button("Delete image  (Delete)", self._delete_current, theme.BUTTON_DANGER))
-        lv.addWidget(label(HELP, theme.DIM, True))
         lv.addStretch(1)
         self.status_lbl = label("", theme.DIM, True)
         lv.addWidget(self.status_lbl)
@@ -116,6 +112,7 @@ class MainWindow(QMainWindow):
         self.canvas = Canvas(len(self.ds.classes))
         self.canvas.on_brush_change = lambda _size: self._refresh_mode_label()
         self.canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.shortcuts = ShortcutsCard(self.canvas)
 
         lay.addWidget(left)
         lay.addWidget(self.canvas, 1)
@@ -292,6 +289,8 @@ class MainWindow(QMainWindow):
             self.canvas.clear()
         elif k == Qt.Key.Key_Delete:
             self._delete_current()
+        elif k == Qt.Key.Key_H:
+            self.shortcuts.toggle()
         elif k == Qt.Key.Key_BracketLeft:
             self.canvas.set_brush(self.canvas.brush_size - 2)
         elif k == Qt.Key.Key_BracketRight:
