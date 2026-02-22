@@ -16,8 +16,7 @@ ROWS = [
     ("Left / Right drag", "paint / erase in brush mode"),
     ("Wheel,  [  ]", "brush size"),
     ("C", "clear the active class"),
-    ("Space", "done, save and next"),
-    ("D  /  Q", "next / previous image"),
+    ("D  /  Q", "next / previous, saves the image"),
     ("Delete", "remove image and mask"),
     ("H", "show / hide this card"),
 ]
