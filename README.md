@@ -67,7 +67,8 @@ Install PyTorch first, from the index that matches your CUDA version on
 CPU-only build. Then start it with `sam2-annotator`, or open `src/run.py` in an editor and press Run.
 
 A dialog asks for three things: the image folder, the classes, and where the masks go. To try it,
-choose `sample_data` with `cat, dog`.
+choose `sample_data` with `cat, dog`. Finished masks for the samples ship in `sample_data_annotations`,
+so they open already annotated; point the output at a new folder to annotate them from scratch.
 
 ## Controls
 
