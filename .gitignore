@@ -15,3 +15,5 @@ venv/
 
 # annotation output written while working, see --out
 *_annotations/
+# finished masks for the sample images ship with the repo
+!sample_data_annotations/
